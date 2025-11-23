@@ -6,15 +6,15 @@ import requests
 from dotenv import load_dotenv
 
 # === CONFIG ===
-# Load variables from env.txt (or bot.env if you prefer)
-env_loaded = load_dotenv("env.txt")
+# Force load env file from container root
+env_loaded = load_dotenv("/home/container/env.txt")
 print(f"✅ load_dotenv returned: {env_loaded}")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 print(f"🔍 DISCORD_TOKEN loaded: {TOKEN is not None}")
 
 if not TOKEN:
-    raise ValueError("DISCORD_TOKEN not found. Check env.txt and file path.")
+    raise ValueError("DISCORD_TOKEN not found. Check env.txt contents and path.")
 
 MODEL_URL = "https://github.com/Noveltek/bulldog-bot/releases/download/v1.0-model/roberta_bilstm_final.pt"
 MODEL_PATH = "roberta_bilstm_final.pt"
