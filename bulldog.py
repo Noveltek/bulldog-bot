@@ -5,7 +5,7 @@ import torch
 import requests
 
 # === CONFIG ===
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("MTQxMzM2ODcxMjMwMzczODk2Mw.GnFn5Y.Ywfc5vl58EJ5KA5JMhxVR8qGvx1TfLN2RQ4TZo")
 MODEL_URL = "https://github.com/Noveltek/bulldog-bot/releases/download/v1.0-model/roberta_bilstm_final.pt"
 MODEL_PATH = "roberta_bilstm_final.pt"
 
