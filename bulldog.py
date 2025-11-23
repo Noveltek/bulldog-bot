@@ -1,48 +1,77 @@
-import discord
-import torch
 import os
+import discord
+from discord.ext import commands
+import torch
 import requests
 
-# --- Model setup ---
+# === CONFIG ===
+TOKEN = os.getenv("DISCORD_TOKEN")
 MODEL_URL = "https://github.com/Noveltek/bulldog-bot/releases/download/v1.0-model/roberta_bilstm_final.pt"
 MODEL_PATH = "roberta_bilstm_final.pt"
 
-# ✅ Updated: download from GitHub if file is missing
-if not os.path.exists(MODEL_PATH):
-    print("🔄 Downloading model file from GitHub...")
-    response = requests.get(MODEL_URL)
-    with open(MODEL_PATH, "wb") as f:
-        f.write(response.content)
-    print("✅ Model downloaded.")
-
-# ✅ Load the model
-try:
-    model = torch.load(MODEL_PATH, map_location=torch.device("cpu"))
-    print("✅ Model loaded successfully.")
-except Exception as e:
-    print(f"❌ Failed to load model: {e}")
-
-# --- Discord bot setup ---
+# === DISCORD BOT SETUP ===
 intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-@client.event
+# === LAZY MODEL LOADER ===
+model = None
+
+def load_model():
+    global model
+    if model is not None:
+        return model
+
+    # Download model file if missing
+    if not os.path.exists(MODEL_PATH):
+        print("🔄 Downloading model file from GitHub...")
+        resp = requests.get(MODEL_URL)
+        with open(MODEL_PATH, "wb") as f:
+            f.write(resp.content)
+        print("✅ Model downloaded.")
+
+    print("⚡ Loading model gradually with memory optimizations...")
+
+    # Import model class
+    from model_def import RobertaBiLSTM
+    model = RobertaBiLSTM()
+
+    # Load weights gradually
+    checkpoint = torch.load(MODEL_PATH, map_location="cpu")
+    state_dict = model.state_dict()
+    for name, param in checkpoint.items():
+        if name in state_dict:
+            state_dict[name].copy_(param)
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    # Convert to half precision
+    for p in model.parameters():
+        p.data = p.data.half()
+
+    print("✅ Model fully loaded in half precision.")
+    return model
+
+# === COMMANDS ===
+@bot.event
 async def on_ready():
-    print(f"Logged in as {client.user}")
-    print("Ready!")
+    print(f"Bulldog is online as {bot.user}")
 
-@client.event
-async def on_message(message):
-    if message.author == client.user:
-        return
+@bot.command()
+async def ping(ctx):
+    await ctx.send("Pong 🐶")
 
-    if message.content.lower() == "ping":
-        await message.channel.send("Pong 🐶")
+@bot.command()
+async def classify(ctx, *, text: str):
+    mdl = load_model()
 
-    # Add your model-based response logic here
-    # Example: use model to generate reply based on message.content
+    # Example input (replace with tokenizer logic)
+    input_ids = torch.randint(0, 100, (1, 10))  # dummy input
+    attention_mask = torch.ones_like(input_ids)
 
-# --- Run the bot ---
-TOKEN = os.getenv("DISCORD_TOKEN")
-client.run(TOKEN)
+    with torch.no_grad():
+        output = mdl(input_ids=input_ids, attention_mask=attention_mask)
+
+    await ctx.send(f"Model output: {output}")
+    
+# === START BOT ===
+bot.run(TOKEN)
