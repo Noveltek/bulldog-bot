@@ -1,40 +1,111 @@
+# bulldog_bot.py
+import os
+import asyncio
+import torch
+import torch.nn as nn
 import discord
 from discord.ext import commands
-import torch
+from transformers import RobertaModel, RobertaTokenizer
+
+# -----------------------------
+# Configuration and global state
+# -----------------------------
+ALERT_CONFIDENCE_THRESHOLD = 0.75  # tune this based on your validation
+CHECKPOINT_PATH = "final_checkpoint.pt"  # ensure this file exists locally
+ROBERTA_NAME = "roberta-base"
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Dictionary to store alert channel per server
+# Per-server alert channel mapping
 alert_channels = {}
 
-# Dummy model loader (replace with your actual model)
-def load_model():
-    class DummyModel(torch.nn.Module):
-        def forward(self, input_ids, attention_mask=None):
-            return {"logits": torch.randn(1, 2)}
-    return DummyModel()
+# -----------------------------
+# Model definition and utilities
+# -----------------------------
+class RobertaBiLSTM(nn.Module):
+    def __init__(self, roberta_name=ROBERTA_NAME, hidden_size=768, lstm_hidden=256, num_classes=2, dropout=0.2):
+        super().__init__()
+        self.encoder = RobertaModel.from_pretrained(roberta_name)
+        self.lstm = nn.LSTM(
+            input_size=hidden_size,
+            hidden_size=lstm_hidden,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=True
+        )
+        self.dropout = nn.Dropout(dropout)
+        self.classifier = nn.Linear(lstm_hidden * 2, num_classes)
 
-# --- Slash Commands ---
+    def forward(self, input_ids, attention_mask=None):
+        enc = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
+        lstm_out, _ = self.lstm(enc.last_hidden_state)   # [batch, seq, 2*lstm_hidden]
+        pooled = lstm_out[:, -1, :]                      # last timestep pooling
+        logits = self.classifier(self.dropout(pooled))   # [batch, num_classes]
+        return {"logits": logits}
 
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+TOKENIZER = RobertaTokenizer.from_pretrained(ROBERTA_NAME)
+MODEL = RobertaBiLSTM().to(DEVICE)
+MODEL_LOADED = False
+
+def preprocess(text: str):
+    batch = TOKENIZER(
+        text,
+        return_tensors="pt",
+        truncation=True,
+        padding=True,
+        max_length=256
+    )
+    return batch["input_ids"].to(DEVICE), batch["attention_mask"].to(DEVICE)
+
+def classify_text(text: str):
+    with torch.no_grad():
+        input_ids, attention_mask = preprocess(text)
+        out = MODEL(input_ids=input_ids, attention_mask=attention_mask)
+        logits = out["logits"]                # [1, 2]
+        probs = torch.softmax(logits, dim=1)  # [1, 2]
+        pred = torch.argmax(probs, dim=1).item()
+        confidence = probs[0, pred].item()
+    return pred, confidence, logits.cpu().tolist()
+
+# -----------------------------
+# Discord bot events and commands
+# -----------------------------
 @bot.event
 async def on_ready():
-    await bot.tree.sync()   # sync slash commands with Discord
-    print(f"{bot.user} is online and commands are synced!")
+    # Slow startup and robust command sync to avoid crashes/race conditions
+    global MODEL_LOADED
+    print("Bulldog starting up...")
+
+    # Give Discord a moment before syncing commands
+    await asyncio.sleep(2.0)
+    try:
+        await bot.tree.sync()
+        print("Slash commands synced.")
+    except Exception as e:
+        print(f"Command sync failed: {e}")
+
+    # Load model checkpoint once at startup
+    if not MODEL_LOADED:
+        try:
+            state = torch.load(CHECKPOINT_PATH, map_location="cpu")
+            MODEL.load_state_dict(state)
+            MODEL.eval()
+            MODEL_LOADED = True
+            print(f"Model loaded from {CHECKPOINT_PATH} on {DEVICE}.")
+            # quick sanity inference
+            _pred, _conf, _logits = classify_text("this is a quick startup test")
+            print(f"Startup test -> pred:{_pred} conf:{_conf:.3f} logits:{_logits}")
+        except Exception as e:
+            print(f"Failed to load model checkpoint '{CHECKPOINT_PATH}': {e}")
+
+    print(f"{bot.user} is online and ready.")
 
 @bot.tree.command(name="ping", description="Check if Bulldog is alive")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong 🐶")
-
-@bot.tree.command(name="classify", description="Classify a piece of text")
-async def classify(interaction: discord.Interaction, text: str):
-    mdl = load_model()
-    input_ids = torch.randint(0, 100, (1, 10))
-    attention_mask = torch.ones_like(input_ids)
-    with torch.no_grad():
-        output = mdl(input_ids=input_ids, attention_mask=attention_mask)
-    await interaction.response.send_message(f"Model output: {output}")
 
 @bot.tree.command(name="setalerts", description="Set the alerts channel for this server")
 async def setalerts(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -43,42 +114,70 @@ async def setalerts(interaction: discord.Interaction, channel: discord.TextChann
         f"✅ Alerts will now be sent to {channel.mention}", ephemeral=True
     )
 
-# --- Automatic Monitoring ---
+@bot.tree.command(name="classify", description="Classify a piece of text with Bulldog's model")
+async def classify_cmd(interaction: discord.Interaction, text: str):
+    if not MODEL_LOADED:
+        await interaction.response.send_message("Model is still loading. Try again in a moment.", ephemeral=True)
+        return
+    pred, conf, logits = classify_text(text)
+    label = "risky" if pred == 1 else "safe"
+    await interaction.response.send_message(
+        f"Label: {label} | Confidence: {conf:.3f} | Logits: {logits}"
+    )
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
+    # Ignore bot messages
     if message.author.bot:
         return
 
-    content = message.content.lower()
-    risky_phrases = ["i wanna die", "you deserve to die", "kill myself", "hate you"]
-    is_risky = any(phrase in content for phrase in risky_phrases)
+    # Ensure commands still process
+    await bot.process_commands(message)
 
-    if is_risky:
-        mdl = load_model()
-        input_ids = torch.randint(0, 100, (1, 10))
-        attention_mask = torch.ones_like(input_ids)
-        with torch.no_grad():
-            output = mdl(input_ids=input_ids, attention_mask=attention_mask)
+    # If model isn't ready yet, skip classification gracefully
+    if not MODEL_LOADED:
+        return
 
-        guild_id = message.guild.id
-        if guild_id in alert_channels:
+    # Use model inference (no hard-coded phrases)
+    pred, conf, logits = classify_text(message.content)
+
+    if pred == 1 and conf >= ALERT_CONFIDENCE_THRESHOLD:
+        guild_id = message.guild.id if message.guild else None
+
+        # Prefer server alerts channel if configured
+        if guild_id and guild_id in alert_channels:
             alert_channel = bot.get_channel(alert_channels[guild_id])
             if alert_channel:
                 await alert_channel.send(
-                    f"🚨 Offensive message detected:\n"
-                    f"User: {message.author.mention}\n"
+                    f":siren: NEW ALERT: {message.author.mention}\n"
                     f"Message: {message.content}\n"
-                    f"Model output: {output}"
+                    f"Label: risky | Confidence: {conf:.3f}\n"
+                    f"Logits: {logits}"
                 )
-        else:
-            # fallback: DM the author
-            try:
-                await message.author.send("⚠️ Your message was flagged as harmful.")
-            except:
-                pass
+                return
 
-    await bot.process_commands(message)
+        # Fallback: DM the user if no alert channel is set or guild is None
+        try:
+            await message.author.send(
+                "# :siren: Offical Bulldog Alert! Your message was flagged! Please contact the national suiccide prevention line: 988. Reach out to family, friends, or seek professional help."
+            )
+        except Exception:
+            # User may have DMs disabled; just ignore silently
+            pass
 
-# Run your bot
-bot.run("YOUR_BOT_TOKEN")
+# -----------------------------
+# Entry point
+# -----------------------------
+if __name__ == "__main__":
+    # Token should be provided via environment variable locally.
+    # Example (Windows PowerShell):
+    #   $env:DISCORD_TOKEN = "YOUR_REAL_TOKEN_HERE"
+    #   python bulldog_bot.py
+    #
+    # Example (macOS/Linux):
+    #   export DISCORD_TOKEN="YOUR_REAL_TOKEN_HERE"
+    #   python bulldog_bot.py
+    token = os.getenv("DISCORD_TOKEN")
+    if not token:
+        raise RuntimeError("DISCORD_TOKEN environment variable not set.")
+    bot.run(token)
