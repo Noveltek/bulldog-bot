@@ -2,16 +2,43 @@ import discord
 from discord.ext import commands
 import json
 import os
+import requests
 import torch
 
-# --- Load your model ---
-# Make sure roberta_bilstm_final.pt is in the same folder
-model = torch.nn.Module()  # placeholder for your actual model class
-model.load_state_dict(torch.load("roberta_bilstm_final.pt", map_location="cpu"))
+# --- Download model from Google Drive ---
+MODEL_ID = "1BqLo-S8pXkaP8Mf7-JjPiNLI5odeelG1"
+MODEL_URL = f"https://drive.google.com/uc?id={MODEL_ID}&export=download"
+MODEL_PATH = "roberta_bilstm_final.pt"
+
+if not os.path.exists(MODEL_PATH):
+    print("🔄 Downloading model file from Google Drive...")
+    response = requests.get(MODEL_URL)
+    with open(MODEL_PATH, "wb") as f:
+        f.write(response.content)
+    print("✅ Model downloaded.")
+
+# --- Define your actual model class here ---
+class RobertaBiLSTM(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        # TODO: add your real layers (Roberta + BiLSTM + classifier)
+        self.dummy = torch.nn.Linear(1, 1)  # placeholder
+
+    def forward(self, x):
+        return self.dummy(x)
+
+# --- Load the model ---
+model = RobertaBiLSTM()
+try:
+    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.eval()
+    print("✅ Model loaded successfully.")
+except Exception as e:
+    print(f"❌ Failed to load model: {e}")
 
 # --- Discord setup ---
 intents = discord.Intents.default()
-intents.message_content = True  # required for reading messages
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # --- Channel persistence ---
@@ -60,10 +87,9 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Example: run your model here to classify risk
-    # Replace with your actual inference code
+    # Example risk detection (replace with your model inference)
     text = message.content
-    risk_detected = "suicide" in text.lower()  # placeholder logic
+    risk_detected = "suicide" in text.lower() or "kill myself" in text.lower()
 
     if risk_detected:
         try:
@@ -77,7 +103,9 @@ async def on_message(message):
         if channel_id:
             channel = bot.get_channel(channel_id)
             if channel:
-                await channel.send(f"🚨 Risk detected in {message.author.mention}'s message:\n> {message.content}")
+                await channel.send(
+                    f"🚨 Risk detected in {message.author.mention}'s message:\n> {message.content}"
+                )
 
     # Allow commands to still work
     await bot.process_commands(message)
