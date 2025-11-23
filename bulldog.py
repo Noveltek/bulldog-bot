@@ -1,80 +1,84 @@
-import os
 import discord
 from discord.ext import commands
 import torch
-import requests
-from dotenv import load_dotenv
 
-# === CONFIG ===
-# Force load env file from container root
-env_loaded = load_dotenv("/home/container/env.txt")
-print(f"✅ load_dotenv returned: {env_loaded}")
-
-TOKEN = os.getenv("DISCORD_TOKEN")
-print(f"🔍 DISCORD_TOKEN loaded: {TOKEN is not None}")
-
-if not TOKEN:
-    raise ValueError("DISCORD_TOKEN not found. Check env.txt contents and path.")
-
-MODEL_URL = "https://github.com/Noveltek/bulldog-bot/releases/download/v1.0-model/roberta_bilstm_final.pt"
-MODEL_PATH = "roberta_bilstm_final.pt"
-
-# === DISCORD BOT SETUP ===
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === LAZY MODEL LOADER ===
-model = None
+# Dictionary to store alert channel per server
+alert_channels = {}
 
+# Dummy model loader (replace with your actual model)
 def load_model():
-    global model
-    if model is not None:
-        return model
+    class DummyModel(torch.nn.Module):
+        def forward(self, input_ids, attention_mask=None):
+            return {"logits": torch.randn(1, 2)}
+    return DummyModel()
 
-    if not os.path.exists(MODEL_PATH):
-        print("🔄 Downloading model file from GitHub...")
-        resp = requests.get(MODEL_URL)
-        resp.raise_for_status()
-        with open(MODEL_PATH, "wb") as f:
-            f.write(resp.content)
-        print("✅ Model downloaded.")
+# --- Slash Commands ---
 
-    print("⚡ Loading model gradually with memory optimizations...")
-    from model_def import RobertaBiLSTM
-    model = RobertaBiLSTM()
-
-    checkpoint = torch.load(MODEL_PATH, map_location="cpu")
-    state_dict = model.state_dict()
-    for name, param in checkpoint.items():
-        if name in state_dict:
-            state_dict[name].copy_(param)
-    model.load_state_dict(state_dict)
-    model.eval()
-
-    for p in model.parameters():
-        p.data = p.data.half()
-
-    print("✅ Model fully loaded in half precision.")
-    return model
-
-# === COMMANDS ===
 @bot.event
 async def on_ready():
-    print(f"Bulldog is online as {bot.user}")
+    await bot.tree.sync()   # sync slash commands with Discord
+    print(f"{bot.user} is online and commands are synced!")
 
-@bot.command()
-async def ping(ctx):
-    await ctx.send("Pong 🐶")
+@bot.tree.command(name="ping", description="Check if Bulldog is alive")
+async def ping(interaction: discord.Interaction):
+    await interaction.response.send_message("Pong 🐶")
 
-@bot.command()
-async def classify(ctx, *, text: str):
+@bot.tree.command(name="classify", description="Classify a piece of text")
+async def classify(interaction: discord.Interaction, text: str):
     mdl = load_model()
-    input_ids = torch.randint(0, 100, (1, 10))  # dummy input
+    input_ids = torch.randint(0, 100, (1, 10))
     attention_mask = torch.ones_like(input_ids)
     with torch.no_grad():
         output = mdl(input_ids=input_ids, attention_mask=attention_mask)
-    await ctx.send(f"Model output: {output}")
+    await interaction.response.send_message(f"Model output: {output}")
 
-# === START BOT ===
-bot.run(TOKEN)
+@bot.tree.command(name="setalerts", description="Set the alerts channel for this server")
+async def setalerts(interaction: discord.Interaction, channel: discord.TextChannel):
+    alert_channels[interaction.guild.id] = channel.id
+    await interaction.response.send_message(
+        f"✅ Alerts will now be sent to {channel.mention}", ephemeral=True
+    )
+
+# --- Automatic Monitoring ---
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    content = message.content.lower()
+    risky_phrases = ["i wanna die", "you deserve to die", "kill myself", "hate you"]
+    is_risky = any(phrase in content for phrase in risky_phrases)
+
+    if is_risky:
+        mdl = load_model()
+        input_ids = torch.randint(0, 100, (1, 10))
+        attention_mask = torch.ones_like(input_ids)
+        with torch.no_grad():
+            output = mdl(input_ids=input_ids, attention_mask=attention_mask)
+
+        guild_id = message.guild.id
+        if guild_id in alert_channels:
+            alert_channel = bot.get_channel(alert_channels[guild_id])
+            if alert_channel:
+                await alert_channel.send(
+                    f"🚨 Offensive message detected:\n"
+                    f"User: {message.author.mention}\n"
+                    f"Message: {message.content}\n"
+                    f"Model output: {output}"
+                )
+        else:
+            # fallback: DM the author
+            try:
+                await message.author.send("⚠️ Your message was flagged as harmful.")
+            except:
+                pass
+
+    await bot.process_commands(message)
+
+# Run your bot
+bot.run("YOUR_BOT_TOKEN")
