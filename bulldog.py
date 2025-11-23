@@ -6,8 +6,11 @@ import requests
 from dotenv import load_dotenv
 
 # === CONFIG ===
-load_dotenv()  # loads variables from .env next to this file
-TOKEN = os.getenv("DISCORD_TOKEN")  # read token from .env
+from dotenv import load_dotenv
+
+# Load variables from env.txt (or bot.env if you prefer)
+load_dotenv("env.txt")
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 MODEL_URL = "https://github.com/Noveltek/bulldog-bot/releases/download/v1.0-model/roberta_bilstm_final.pt"
 MODEL_PATH = "roberta_bilstm_final.pt"
