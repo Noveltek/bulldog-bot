@@ -75,15 +75,17 @@ def classify_text(text: str):
 # -----------------------------
 @bot.event
 async def on_ready():
-    # Slow startup and robust command sync to avoid crashes/race conditions
     global MODEL_LOADED
     print("Bulldog starting up...")
 
     # Give Discord a moment before syncing commands
     await asyncio.sleep(2.0)
     try:
-        await bot.tree.sync()
-        print("Slash commands synced.")
+        # For testing, sync to a specific guild for instant availability
+        # Replace YOUR_GUILD_ID with your test server's ID
+        guild = discord.Object(id=YOUR_GUILD_ID)
+        await bot.tree.sync(guild=guild)
+        print("Slash commands synced to test guild.")
     except Exception as e:
         print(f"Command sync failed: {e}")
 
@@ -127,24 +129,19 @@ async def classify_cmd(interaction: discord.Interaction, text: str):
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Ignore bot messages
     if message.author.bot:
         return
 
-    # Ensure commands still process
     await bot.process_commands(message)
 
-    # If model isn't ready yet, skip classification gracefully
     if not MODEL_LOADED:
         return
 
-    # Use model inference (no hard-coded phrases)
     pred, conf, logits = classify_text(message.content)
 
     if pred == 1 and conf >= ALERT_CONFIDENCE_THRESHOLD:
         guild_id = message.guild.id if message.guild else None
 
-        # Prefer server alerts channel if configured
         if guild_id and guild_id in alert_channels:
             alert_channel = bot.get_channel(alert_channels[guild_id])
             if alert_channel:
@@ -156,27 +153,17 @@ async def on_message(message: discord.Message):
                 )
                 return
 
-        # Fallback: DM the user if no alert channel is set or guild is None
         try:
             await message.author.send(
-                "# :siren: Offical Bulldog Alert! Your message was flagged! Please contact the national suiccide prevention line: 988. Reach out to family, friends, or seek professional help."
+                "# :siren: Official Bulldog Alert! Your message was flagged! Please contact the national suicide prevention line: 988. Reach out to family, friends, or seek professional help."
             )
         except Exception:
-            # User may have DMs disabled; just ignore silently
             pass
 
 # -----------------------------
 # Entry point
 # -----------------------------
 if __name__ == "__main__":
-    # Token should be provided via environment variable locally.
-    # Example (Windows PowerShell):
-    #   $env:DISCORD_TOKEN = "YOUR_REAL_TOKEN_HERE"
-    #   python bulldog_bot.py
-    #
-    # Example (macOS/Linux):
-    #   export DISCORD_TOKEN="YOUR_REAL_TOKEN_HERE"
-    #   python bulldog_bot.py
     token = os.getenv("DISCORD_TOKEN")
     if not token:
         raise RuntimeError("DISCORD_TOKEN environment variable not set.")
