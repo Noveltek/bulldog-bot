@@ -83,7 +83,7 @@ async def on_ready():
     try:
         # For testing, sync to a specific guild for instant availability
         # Replace YOUR_GUILD_ID with your test server's ID
-        guild = discord.Object(id=YOUR_GUILD_ID)
+        guild = discord.Object(id=1408670998001094666)
         await bot.tree.sync(guild=guild)
         print("Slash commands synced to test guild.")
     except Exception as e:
