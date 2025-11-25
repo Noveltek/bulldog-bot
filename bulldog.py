@@ -30,7 +30,7 @@ async def on_ready():
     for guild in bot.guilds:
         print("In guild:", guild.name, guild.id)
     try:
-        guild_id = YOUR_GUILD_ID  # replace with your server ID
+        guild_id = 1408670998001094666  # replace with your server ID
         synced = await bot.tree.sync(guild=discord.Object(id=guild_id))
         print(f"Synced {len(synced)} commands to guild {guild_id}")
     except Exception as e:
