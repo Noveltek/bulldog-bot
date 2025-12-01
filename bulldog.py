@@ -14,10 +14,11 @@ from typing import Tuple
 # 🚨 IMPORTANT: 1. Replace this placeholder token.
 DISCORD_TOKEN = "YOUR_BOT_DISCORD_TOKEN_HERE" 
 
-# ➡️ 2. Ensure this folder is uploaded to your host: roberta_bilstm_tokenizer
+# ➡️ 2. Ensure this ZIP file is uploaded to your host: roberta_bilstm_tokenizer.zip
 TOKENIZER_PATH = "roberta_bilstm_tokenizer" 
+TOKENIZER_ZIP_PATH = f"{TOKENIZER_PATH}.zip" # Used for extraction
 
-# 🚨 3. Your Model File Details (Do NOT change these unless the file ID changes) 🚨
+# 🚨 3. Your Model File Details (The download link you provided) 🚨
 MODEL_FILE_ID = "1BqLo-S8pXkaP8Mf7-JjPiNLI5odeelG1"
 MODEL_PATH = "roberta_bilstm_final.pt"
 
@@ -48,15 +49,31 @@ class RoBERTa_BiLSTM(nn.Module):
 model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
-def download_model_if_missing():
-    """Checks if the model file exists and downloads it from Google Drive if missing."""
+def setup_model_files():
+    """Ensures the tokenizer is extracted and the large model is downloaded."""
+    
+    # --- 1. HANDLE TOKENIZER EXTRACTION (If uploaded as a zip) ---
+    if not os.path.isdir(TOKENIZER_PATH) and os.path.exists(TOKENIZER_ZIP_PATH):
+        print(f"Tokenizer found as zip file ({TOKENIZER_ZIP_PATH}). Extracting...")
+        # Note: This relies on the 'unzip' utility being available on your host.
+        result = os.system(f"unzip {TOKENIZER_ZIP_PATH}")
+        if result != 0:
+            print("WARNING: Could not unzip tokenizer file. Ensure 'unzip' utility is available.")
+            
+    if not os.path.isdir(TOKENIZER_PATH):
+        print("FATAL ERROR: Tokenizer folder not found or extraction failed. Cannot proceed.")
+        raise RuntimeError("Tokenizer files are missing.")
+
+
+    # --- 2. HANDLE LARGE MODEL DOWNLOAD ---
     if os.path.exists(MODEL_PATH):
         print(f"✅ Model file already found: {MODEL_PATH}")
         return
 
     print("❌ Model file not found. Starting download from Google Drive...")
     
-    # CRITICAL: This requires 'gdown' to be installed and the file to be publicly shared.
+    # CRITICAL: This requires 'gdown' to be installed (from requirements.txt) 
+    # and the Google Drive link to be public.
     download_command = f"gdown --id {MODEL_FILE_ID} -O {MODEL_PATH}"
     result = os.system(download_command)
     
@@ -71,8 +88,8 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     """Loads the trained model weights and tokenizer."""
     global model, tokenizer
     
-    # STEP 1: Ensure the large model file is available locally
-    download_model_if_missing()
+    # STEP 1: Ensure all necessary files are downloaded/extracted
+    setup_model_files() 
     
     # STEP 2: Load Tokenizer
     try:
@@ -92,7 +109,7 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
         return model, tokenizer
     except Exception as e:
         print(f"FATAL ERROR: Could not load model from {MODEL_PATH}: {e}")
-        raise RuntimeError("Model loading failed after download.")
+        raise RuntimeError("Model loading failed after file setup.")
 
 def run_model_prediction(text: str) -> int:
     """Returns the model's prediction (1 for harmful, 0 for non-harmful)."""
@@ -102,7 +119,7 @@ def run_model_prediction(text: str) -> int:
         try:
             load_model_and_tokenizer() 
         except RuntimeError:
-            return 0 # Fail safely
+            return 0 
 
     enc = tokenizer(text, padding="max_length", truncation=True, max_length=MAX_SEQ_LEN, return_tensors="pt")
     input_ids = enc["input_ids"].to(DEVICE)
@@ -121,7 +138,6 @@ def run_model_prediction(text: str) -> int:
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.guilds = True 
-# Prefix is set to '!' for the one-time sync command
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
