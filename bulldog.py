@@ -14,9 +14,9 @@ from typing import Tuple
 # 🚨 IMPORTANT: 1. Replace this placeholder token.
 DISCORD_TOKEN = "YOUR_BOT_DISCORD_TOKEN_HERE" 
 
-# ➡️ 2. Ensure this ZIP file is uploaded to your host: roberta_bilstm_tokenizer.zip
-TOKENIZER_PATH = "roberta_bilstm_tokenizer" 
-TOKENIZER_ZIP_PATH = f"{TOKENIZER_PATH}.zip" # Used for extraction
+# ➡️ 2. TOKENIZER PATH IS NOW SET TO THE ROOT DIRECTORY ('.')
+# This matches your current file structure where the files are next to bulldog.py
+TOKENIZER_PATH = "." 
 
 # 🚨 3. Your Model File Details (The download link you provided) 🚨
 MODEL_FILE_ID = "1BqLo-S8pXkaP8Mf7-JjPiNLI5odeelG1"
@@ -50,30 +50,16 @@ model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
 def setup_model_files():
-    """Ensures the tokenizer is extracted and the large model is downloaded."""
+    """Ensures the large model is downloaded. Tokenizer files are assumed to be in the root directory."""
     
-    # --- 1. HANDLE TOKENIZER EXTRACTION (If uploaded as a zip) ---
-    if not os.path.isdir(TOKENIZER_PATH) and os.path.exists(TOKENIZER_ZIP_PATH):
-        print(f"Tokenizer found as zip file ({TOKENIZER_ZIP_PATH}). Extracting...")
-        # Note: This relies on the 'unzip' utility being available on your host.
-        result = os.system(f"unzip {TOKENIZER_ZIP_PATH}")
-        if result != 0:
-            print("WARNING: Could not unzip tokenizer file. Ensure 'unzip' utility is available.")
-            
-    if not os.path.isdir(TOKENIZER_PATH):
-        print("FATAL ERROR: Tokenizer folder not found or extraction failed. Cannot proceed.")
-        raise RuntimeError("Tokenizer files are missing.")
-
-
-    # --- 2. HANDLE LARGE MODEL DOWNLOAD ---
+    # --- 1. HANDLE LARGE MODEL DOWNLOAD ---
     if os.path.exists(MODEL_PATH):
         print(f"✅ Model file already found: {MODEL_PATH}")
         return
 
     print("❌ Model file not found. Starting download from Google Drive...")
     
-    # CRITICAL: This requires 'gdown' to be installed (from requirements.txt) 
-    # and the Google Drive link to be public.
+    # CRITICAL: This requires 'gdown' to be installed and the Drive link to be public.
     download_command = f"gdown --id {MODEL_FILE_ID} -O {MODEL_PATH}"
     result = os.system(download_command)
     
@@ -88,17 +74,18 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     """Loads the trained model weights and tokenizer."""
     global model, tokenizer
     
-    # STEP 1: Ensure all necessary files are downloaded/extracted
+    # STEP 1: Download model file if missing
     setup_model_files() 
     
-    # STEP 2: Load Tokenizer
+    # STEP 2: Load Tokenizer (It will look in the root directory '.')
     try:
         tokenizer = RobertaTokenizer.from_pretrained(TOKENIZER_PATH)
         tokenizer.add_tokens(["_"])
-    except Exception:
-        print(f"ERROR: Could not load tokenizer from {TOKENIZER_PATH}. Using fallback.")
-        tokenizer = RobertaTokenizer.from_pretrained("roberta-base")
-        tokenizer.add_tokens(["_"])
+        print(f"✅ Tokenizer loaded from current directory ({TOKENIZER_PATH})")
+    except Exception as e:
+        # If the tokenizer files are missing from the root directory, this will catch it.
+        print(f"FATAL ERROR: Could not load tokenizer from {TOKENIZER_PATH}. Files must be in the same directory as bulldog.py: {e}")
+        raise RuntimeError("Tokenizer loading failed.")
         
     # STEP 3: Instantiate and Load Model
     try:
@@ -106,6 +93,7 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
+        print("✅ Model weights loaded successfully.")
         return model, tokenizer
     except Exception as e:
         print(f"FATAL ERROR: Could not load model from {MODEL_PATH}: {e}")
@@ -142,11 +130,21 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
+    # --- CRITICAL DEBUGGING STEP ADDED HERE ---
+    print("--- STARTING MODEL SETUP ---")
+
     try:
         load_model_and_tokenizer() 
+        
+        # Syncing commands will only happen after model is loaded successfully
+        print("Attempting command synchronization...")
+        await bot.tree.sync()
+        print("✅ Commands synced.")
+        
         print(f'Bot connected as {bot.user}')
         print('Bulldog Bot is active and monitoring messages.')
-    except RuntimeError:
+    except RuntimeError as e: 
+        print(f"FATAL SETUP ERROR: {e}")
         print("Bot failed to start. Shutting down.")
         await bot.close()
 
@@ -189,6 +187,7 @@ async def on_message(message):
     if message.author == bot.user or message.guild is None:
         return
     
+    # This call now includes the model loading and prediction logic
     prediction = run_model_prediction(message.content)
     
     if prediction == 1:
