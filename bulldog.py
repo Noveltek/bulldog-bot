@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 from transformers import RobertaTokenizer, RobertaModel
 from typing import Tuple
+# Import requests for the pure Python download solution
+import requests 
 
 # ==============================================================
 # 🛠️ 1. CONFIGURATION: WHAT TO CHANGE
@@ -35,7 +37,6 @@ MOD_ALERT_CHANNEL_ID: int = None
 class RoBERTa_BiLSTM(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
-        # Note: We load roberta-base from the internet only once during the class instantiation
         self.roberta = RobertaModel.from_pretrained("roberta-base")
         self.lstm = nn.LSTM(768, 256, batch_first=True, bidirectional=True)
         self.classifier = nn.Linear(512, num_classes)
@@ -50,34 +51,58 @@ model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
 def setup_model_files():
-    """Ensures the large model is downloaded using the more robust wget command."""
-    
-    # --- 1. HANDLE LARGE MODEL DOWNLOAD ---
+    """
+    Downloads the large Google Drive model file using the Python 'requests' library,
+    which bypasses the need for command-line tools like gdown or wget.
+    """
     if os.path.exists(MODEL_PATH):
         print(f"✅ Model file already found: {MODEL_PATH}")
         return
 
-    print("❌ Model file not found. Starting download from Google Drive...")
+    print("❌ Model file not found. Starting download using pure Python requests...")
+
+    FILE_ID = MODEL_FILE_ID 
+    URL = "https://drive.google.com/uc?export=download"
+
+    session = requests.Session()
     
-    # CRITICAL: Build the direct download URL for wget
-    # The 'confirm=t' is necessary for large files to bypass the virus scan warning.
-    gdrive_url = f"https://drive.google.com/uc?id={MODEL_FILE_ID}&export=download&confirm=t"
+    # Step 1: Request the file to get the download warning/cookie
+    response = session.get(URL, params={'id': FILE_ID}, stream=True)
     
-    # Use wget: often more stable than gdown on web hosts
-    # The load-cookies part helps with the large file warning
-    download_command = f"wget --load-cookies /tmp/cookies.txt '{gdrive_url}' -O {MODEL_PATH}"
+    def get_confirm_token(response):
+        for key, value in response.cookies.items():
+            if key.startswith('download_warning'):
+                return value
+        return None
+
+    token = get_confirm_token(response)
     
-    print(f"Attempting download with wget...")
-    result = os.system(download_command)
+    if token:
+        # Step 2: If a warning token is found, request the file again with the token
+        params = {'id': FILE_ID, 'confirm': token}
+        response = session.get(URL, params=params, stream=True)
+
+    # Step 3: Stream the content to the file
+    chunk_size = 32768
     
-    if result != 0:
-        print("FATAL ERROR: Download command failed!")
-        print("1. Check if the Drive link is PUBLIC.")
-        print("2. Check if 'wget' utility is available on your host.")
-        print("3. If both fail, your host may restrict outbound network access.")
-        raise RuntimeError("Model download failed.")
-    
-    print(f"✅ Model file downloaded successfully to {MODEL_PATH}")
+    try:
+        with open(MODEL_PATH, "wb") as f:
+            for chunk in response.iter_content(chunk_size=chunk_size):
+                if chunk: # filter out keep-alive new chunks
+                    f.write(chunk)
+        
+        # Simple size check to confirm file was written
+        if os.path.getsize(MODEL_PATH) < 1024 * 1024 * 5: # Check if file is at least 5MB
+            print(f"FATAL ERROR: Downloaded file size is too small ({os.path.getsize(MODEL_PATH)} bytes). Check public access again.")
+            raise RuntimeError("Download failed or file is too small.")
+
+        print(f"✅ Model file downloaded successfully to {MODEL_PATH} ({os.path.getsize(MODEL_PATH) // 1024 // 1024} MB)")
+    except Exception as e:
+        print(f"FATAL ERROR during file write/download: {e}")
+        # Clean up any partial file if the write failed
+        if os.path.exists(MODEL_PATH):
+            os.remove(MODEL_PATH)
+        raise RuntimeError("Model download failed during streaming.")
 
 
 def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
@@ -146,7 +171,6 @@ async def on_ready():
         
         # Syncing commands will only happen after model is loaded successfully
         print("Attempting command synchronization...")
-        # Syncing commands now happens here automatically on startup
         await bot.tree.sync()
         print("✅ Commands synced.")
         
@@ -178,7 +202,6 @@ async def set_alerts_channel_slash(interaction: discord.Interaction, channel: di
     )
 
 # --- Manual Sync Command ---
-# This will be used if the automatic sync fails or if you want to force a refresh
 @bot.command(name='sync')
 @commands.is_owner()
 async def sync_command(ctx):
