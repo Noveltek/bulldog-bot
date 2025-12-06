@@ -19,22 +19,21 @@ TOKENIZER_PATH = "."
 
 # 🚨 3. Model File Details 🚨
 MODEL_PATH = "roberta_bilstm_final.pt"
-# Define the pattern for the uploaded split chunks
-CHUNK_PREFIX = f"{MODEL_PATH}.part_"
 
-# 4. Target Guild for IMMEDIATE Command Sync (Your Server ID)
+# 4. Target Guild for IMMEDIATE Command Sync (Your Server ID: 1408670998001094666)
 TARGET_GUILD_ID = 1408670998001094666
 TARGET_GUILD = discord.Object(id=TARGET_GUILD_ID)
 
 # Model Constants
 MAX_SEQ_LEN = 256
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Use CPU as your host environment log showed CPU-only torch
+DEVICE = torch.device("cpu") 
 
 # Global variable for the moderator channel ID
 MOD_ALERT_CHANNEL_ID: int = None
 
 # ==============================================================
-# 🧠 2. MODEL ARCHITECTURE & PREDICTION LOGIC (No changes here)
+# 🧠 2. MODEL ARCHITECTURE & PREDICTION LOGIC
 # ==============================================================
 
 class RoBERTa_BiLSTM(nn.Module):
@@ -53,52 +52,22 @@ class RoBERTa_BiLSTM(nn.Module):
 model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
-def reassemble_model_file():
-    """Finds the uploaded chunks and reassembles them into the original file."""
-    
-    # 1. Find all 6 chunk files in the directory
-    # We sort them to ensure they are put back in the correct order (part_01, part_02, etc.)
-    chunk_files = sorted([f for f in os.listdir('.') if f.startswith(CHUNK_PREFIX)])
-    
-    # Check if the expected number of files (6) are present
-    if len(chunk_files) != 6:
-        print(f"FATAL ERROR: Found {len(chunk_files)} model chunks. Expected 6.")
-        raise RuntimeError("Model reassembly failed: Incorrect number of chunks.")
-
-    print(f"Found {len(chunk_files)} model chunks. Starting reassembly...")
-    
-    # 2. Reassemble the file
-    try:
-        with open(MODEL_PATH, 'wb') as outfile:
-            for chunk_file in chunk_files:
-                chunk_path = os.path.join('.', chunk_file)
-                with open(chunk_path, 'rb') as infile:
-                    outfile.write(infile.read())
-                print(f"  -> Added {chunk_file}")
-                
-        print(f"✅ Model file reassembled successfully to {MODEL_PATH}")
-    except Exception as e:
-        print(f"FATAL ERROR during reassembly: {e}")
-        if os.path.exists(MODEL_PATH):
-            os.remove(MODEL_PATH)
-        raise RuntimeError("Model reassembly failed.")
+# --- FILE REASSEMBLY LOGIC HAS BEEN REMOVED FOR FINAL CODE ---
 
 def setup_model_files():
-    """Checks for the final model file, and if missing, reassembles it from chunks."""
-    
-    if os.path.exists(MODEL_PATH):
-        print(f"✅ Model file already found: {MODEL_PATH}")
-        return
-
-    # If the file is missing, we must reassemble it from the uploaded parts
-    reassemble_model_file()
+    """Confirms the model file is present after manual SFTP upload."""
+    if not os.path.exists(MODEL_PATH):
+        print(f"FATAL ERROR: The required model file '{MODEL_PATH}' is missing.")
+        print("Please ensure you have manually uploaded the complete 500MB+ file via SFTP.")
+        raise RuntimeError("Model file missing after manual upload.")
+    print(f"✅ Model file confirmed: {MODEL_PATH}")
 
 
 def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     """Loads the trained model weights and tokenizer."""
     global model, tokenizer
     
-    print("--- STEP 1: MODEL FILE CHECK/REASSEMBLY ---")
+    print("--- STEP 1: MODEL FILE CONFIRMATION ---")
     setup_model_files() 
     
     print("--- STEP 2: TOKENIZER LOADING ---")
@@ -113,6 +82,7 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     print("--- STEP 3: MODEL WEIGHTS LOADING ---")
     try:
         model = RoBERTa_BiLSTM(num_classes=2)
+        # Loads the weights directly from the single, large file.
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
         model.to(DEVICE)
         model.eval()
@@ -120,7 +90,7 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
         return model, tokenizer
     except Exception as e:
         print(f"FATAL ERROR: Could not load model from {MODEL_PATH}: {e}")
-        raise RuntimeError("Model loading failed after file setup.")
+        raise RuntimeError("Model loading failed.")
 
 def run_model_prediction(text: str) -> int:
     """Returns the model's prediction (1 for harmful, 0 for non-harmful)."""
@@ -160,7 +130,7 @@ async def on_ready():
         
         # --- COMMAND SYNCHRONIZATION ---
         
-        # 1. IMMEDIATE GUILD SYNC (For your specific server: 1408670998001094666)
+        # 1. IMMEDIATE GUILD SYNC (For your specific server)
         print(f"Attempting command sync for target guild: {TARGET_GUILD_ID}...")
         await bot.tree.sync(guild=TARGET_GUILD)
         print("✅ Target guild commands synced successfully. Commands should be available NOW in this server.")
@@ -203,10 +173,7 @@ async def set_alerts_channel_slash(interaction: discord.Interaction, channel: di
 async def sync_command(ctx):
     await ctx.send("Attempting **Global** synchronization... 🌍")
     try:
-        # Perform global sync
         synced_global = await bot.tree.sync()
-        
-        # Also perform guild sync on command server for immediate availability
         synced_guild = await bot.tree.sync(guild=ctx.guild)
         
         await ctx.send(f"✅ **Globally** synced **{len(synced_global)}** commands. Also synced **{len(synced_guild)}** commands immediately to this guild. Use `/set alerts channel` now.")
