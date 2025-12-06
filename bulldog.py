@@ -14,11 +14,10 @@ from typing import Tuple
 # 🚨 IMPORTANT: 1. Replace this placeholder token.
 DISCORD_TOKEN = "YOUR_BOT_DISCORD_TOKEN_HERE" 
 
-# ➡️ 2. TOKENIZER PATH IS NOW SET TO THE ROOT DIRECTORY ('.')
-# This matches your current file structure where the files are next to bulldog.py
+# ➡️ 2. TOKENIZER PATH: Set to the root directory ('.') as files are uploaded there.
 TOKENIZER_PATH = "." 
 
-# 🚨 3. Your Model File Details (The download link you provided) 🚨
+# 🚨 3. Your Model File Details 🚨
 MODEL_FILE_ID = "1BqLo-S8pXkaP8Mf7-JjPiNLI5odeelG1"
 MODEL_PATH = "roberta_bilstm_final.pt"
 
@@ -36,6 +35,7 @@ MOD_ALERT_CHANNEL_ID: int = None
 class RoBERTa_BiLSTM(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
+        # Note: We load roberta-base from the internet only once during the class instantiation
         self.roberta = RobertaModel.from_pretrained("roberta-base")
         self.lstm = nn.LSTM(768, 256, batch_first=True, bidirectional=True)
         self.classifier = nn.Linear(512, num_classes)
@@ -50,7 +50,7 @@ model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
 def setup_model_files():
-    """Ensures the large model is downloaded. Tokenizer files are assumed to be in the root directory."""
+    """Ensures the large model is downloaded using the more robust wget command."""
     
     # --- 1. HANDLE LARGE MODEL DOWNLOAD ---
     if os.path.exists(MODEL_PATH):
@@ -59,12 +59,22 @@ def setup_model_files():
 
     print("❌ Model file not found. Starting download from Google Drive...")
     
-    # CRITICAL: This requires 'gdown' to be installed and the Drive link to be public.
-    download_command = f"gdown --id {MODEL_FILE_ID} -O {MODEL_PATH}"
+    # CRITICAL: Build the direct download URL for wget
+    # The 'confirm=t' is necessary for large files to bypass the virus scan warning.
+    gdrive_url = f"https://drive.google.com/uc?id={MODEL_FILE_ID}&export=download&confirm=t"
+    
+    # Use wget: often more stable than gdown on web hosts
+    # The load-cookies part helps with the large file warning
+    download_command = f"wget --load-cookies /tmp/cookies.txt '{gdrive_url}' -O {MODEL_PATH}"
+    
+    print(f"Attempting download with wget...")
     result = os.system(download_command)
     
     if result != 0:
-        print("FATAL ERROR: Download command failed! Check if 'gdown' is installed and the Drive link is public.")
+        print("FATAL ERROR: Download command failed!")
+        print("1. Check if the Drive link is PUBLIC.")
+        print("2. Check if 'wget' utility is available on your host.")
+        print("3. If both fail, your host may restrict outbound network access.")
         raise RuntimeError("Model download failed.")
     
     print(f"✅ Model file downloaded successfully to {MODEL_PATH}")
@@ -77,13 +87,12 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     # STEP 1: Download model file if missing
     setup_model_files() 
     
-    # STEP 2: Load Tokenizer (It will look in the root directory '.')
+    # STEP 2: Load Tokenizer (Looks in the root directory '.')
     try:
         tokenizer = RobertaTokenizer.from_pretrained(TOKENIZER_PATH)
         tokenizer.add_tokens(["_"])
         print(f"✅ Tokenizer loaded from current directory ({TOKENIZER_PATH})")
     except Exception as e:
-        # If the tokenizer files are missing from the root directory, this will catch it.
         print(f"FATAL ERROR: Could not load tokenizer from {TOKENIZER_PATH}. Files must be in the same directory as bulldog.py: {e}")
         raise RuntimeError("Tokenizer loading failed.")
         
@@ -130,7 +139,6 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    # --- CRITICAL DEBUGGING STEP ADDED HERE ---
     print("--- STARTING MODEL SETUP ---")
 
     try:
@@ -138,6 +146,7 @@ async def on_ready():
         
         # Syncing commands will only happen after model is loaded successfully
         print("Attempting command synchronization...")
+        # Syncing commands now happens here automatically on startup
         await bot.tree.sync()
         print("✅ Commands synced.")
         
@@ -169,6 +178,7 @@ async def set_alerts_channel_slash(interaction: discord.Interaction, channel: di
     )
 
 # --- Manual Sync Command ---
+# This will be used if the automatic sync fails or if you want to force a refresh
 @bot.command(name='sync')
 @commands.is_owner()
 async def sync_command(ctx):
@@ -187,7 +197,6 @@ async def on_message(message):
     if message.author == bot.user or message.guild is None:
         return
     
-    # This call now includes the model loading and prediction logic
     prediction = run_model_prediction(message.content)
     
     if prediction == 1:
