@@ -6,8 +6,6 @@ import torch
 import torch.nn as nn
 from transformers import RobertaTokenizer, RobertaModel
 from typing import Tuple
-# Import requests for the pure Python download solution
-import requests 
 
 # ==============================================================
 # 🛠️ 1. CONFIGURATION: WHAT TO CHANGE
@@ -16,12 +14,17 @@ import requests
 # 🚨 IMPORTANT: 1. Replace this placeholder token.
 DISCORD_TOKEN = "YOUR_BOT_DISCORD_TOKEN_HERE" 
 
-# ➡️ 2. TOKENIZER PATH: Set to the root directory ('.') as files are uploaded there.
+# ➡️ 2. TOKENIZER PATH: Set to the root directory ('.')
 TOKENIZER_PATH = "." 
 
-# 🚨 3. Your Model File Details 🚨
-MODEL_FILE_ID = "1BqLo-S8pXkaP8Mf7-JjPiNLI5odeelG1"
+# 🚨 3. Model File Details 🚨
 MODEL_PATH = "roberta_bilstm_final.pt"
+# Define the pattern for the uploaded split chunks
+CHUNK_PREFIX = f"{MODEL_PATH}.part_"
+
+# 4. Target Guild for IMMEDIATE Command Sync (Your Server ID)
+TARGET_GUILD_ID = 1408670998001094666
+TARGET_GUILD = discord.Object(id=TARGET_GUILD_ID)
 
 # Model Constants
 MAX_SEQ_LEN = 256
@@ -31,7 +34,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 MOD_ALERT_CHANNEL_ID: int = None
 
 # ==============================================================
-# 🧠 2. MODEL ARCHITECTURE & PREDICTION LOGIC
+# 🧠 2. MODEL ARCHITECTURE & PREDICTION LOGIC (No changes here)
 # ==============================================================
 
 class RoBERTa_BiLSTM(nn.Module):
@@ -50,69 +53,55 @@ class RoBERTa_BiLSTM(nn.Module):
 model: RoBERTa_BiLSTM = None
 tokenizer: RobertaTokenizer = None
 
+def reassemble_model_file():
+    """Finds the uploaded chunks and reassembles them into the original file."""
+    
+    # 1. Find all 6 chunk files in the directory
+    # We sort them to ensure they are put back in the correct order (part_01, part_02, etc.)
+    chunk_files = sorted([f for f in os.listdir('.') if f.startswith(CHUNK_PREFIX)])
+    
+    # Check if the expected number of files (6) are present
+    if len(chunk_files) != 6:
+        print(f"FATAL ERROR: Found {len(chunk_files)} model chunks. Expected 6.")
+        raise RuntimeError("Model reassembly failed: Incorrect number of chunks.")
+
+    print(f"Found {len(chunk_files)} model chunks. Starting reassembly...")
+    
+    # 2. Reassemble the file
+    try:
+        with open(MODEL_PATH, 'wb') as outfile:
+            for chunk_file in chunk_files:
+                chunk_path = os.path.join('.', chunk_file)
+                with open(chunk_path, 'rb') as infile:
+                    outfile.write(infile.read())
+                print(f"  -> Added {chunk_file}")
+                
+        print(f"✅ Model file reassembled successfully to {MODEL_PATH}")
+    except Exception as e:
+        print(f"FATAL ERROR during reassembly: {e}")
+        if os.path.exists(MODEL_PATH):
+            os.remove(MODEL_PATH)
+        raise RuntimeError("Model reassembly failed.")
+
 def setup_model_files():
-    """
-    Downloads the large Google Drive model file using the Python 'requests' library,
-    which bypasses the need for command-line tools like gdown or wget.
-    """
+    """Checks for the final model file, and if missing, reassembles it from chunks."""
+    
     if os.path.exists(MODEL_PATH):
         print(f"✅ Model file already found: {MODEL_PATH}")
         return
 
-    print("❌ Model file not found. Starting download using pure Python requests...")
-
-    FILE_ID = MODEL_FILE_ID 
-    URL = "https://drive.google.com/uc?export=download"
-
-    session = requests.Session()
-    
-    # Step 1: Request the file to get the download warning/cookie
-    response = session.get(URL, params={'id': FILE_ID}, stream=True)
-    
-    def get_confirm_token(response):
-        for key, value in response.cookies.items():
-            if key.startswith('download_warning'):
-                return value
-        return None
-
-    token = get_confirm_token(response)
-    
-    if token:
-        # Step 2: If a warning token is found, request the file again with the token
-        params = {'id': FILE_ID, 'confirm': token}
-        response = session.get(URL, params=params, stream=True)
-
-    # Step 3: Stream the content to the file
-    chunk_size = 32768
-    
-    try:
-        with open(MODEL_PATH, "wb") as f:
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                if chunk: # filter out keep-alive new chunks
-                    f.write(chunk)
-        
-        # Simple size check to confirm file was written
-        if os.path.getsize(MODEL_PATH) < 1024 * 1024 * 5: # Check if file is at least 5MB
-            print(f"FATAL ERROR: Downloaded file size is too small ({os.path.getsize(MODEL_PATH)} bytes). Check public access again.")
-            raise RuntimeError("Download failed or file is too small.")
-
-        print(f"✅ Model file downloaded successfully to {MODEL_PATH} ({os.path.getsize(MODEL_PATH) // 1024 // 1024} MB)")
-    except Exception as e:
-        print(f"FATAL ERROR during file write/download: {e}")
-        # Clean up any partial file if the write failed
-        if os.path.exists(MODEL_PATH):
-            os.remove(MODEL_PATH)
-        raise RuntimeError("Model download failed during streaming.")
+    # If the file is missing, we must reassemble it from the uploaded parts
+    reassemble_model_file()
 
 
 def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
     """Loads the trained model weights and tokenizer."""
     global model, tokenizer
     
-    # STEP 1: Download model file if missing
+    print("--- STEP 1: MODEL FILE CHECK/REASSEMBLY ---")
     setup_model_files() 
     
-    # STEP 2: Load Tokenizer (Looks in the root directory '.')
+    print("--- STEP 2: TOKENIZER LOADING ---")
     try:
         tokenizer = RobertaTokenizer.from_pretrained(TOKENIZER_PATH)
         tokenizer.add_tokens(["_"])
@@ -121,7 +110,7 @@ def load_model_and_tokenizer() -> Tuple[RoBERTa_BiLSTM, RobertaTokenizer]:
         print(f"FATAL ERROR: Could not load tokenizer from {TOKENIZER_PATH}. Files must be in the same directory as bulldog.py: {e}")
         raise RuntimeError("Tokenizer loading failed.")
         
-    # STEP 3: Instantiate and Load Model
+    print("--- STEP 3: MODEL WEIGHTS LOADING ---")
     try:
         model = RoBERTa_BiLSTM(num_classes=2)
         model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
@@ -154,7 +143,7 @@ def run_model_prediction(text: str) -> int:
     return prediction
 
 # ==============================================================
-# 🤖 3. DISCORD BOT IMPLEMENTATION (Core Logic & Slash Commands)
+# 🤖 3. DISCORD BOT IMPLEMENTATION (Core Logic & Syncing)
 # ==============================================================
 
 intents = discord.Intents.default()
@@ -169,10 +158,17 @@ async def on_ready():
     try:
         load_model_and_tokenizer() 
         
-        # Syncing commands will only happen after model is loaded successfully
-        print("Attempting command synchronization...")
+        # --- COMMAND SYNCHRONIZATION ---
+        
+        # 1. IMMEDIATE GUILD SYNC (For your specific server: 1408670998001094666)
+        print(f"Attempting command sync for target guild: {TARGET_GUILD_ID}...")
+        await bot.tree.sync(guild=TARGET_GUILD)
+        print("✅ Target guild commands synced successfully. Commands should be available NOW in this server.")
+        
+        # 2. GLOBAL SYNC (This takes 30-60 minutes)
+        print("Attempting GLOBAL command sync (This can take up to an hour)...")
         await bot.tree.sync()
-        print("✅ Commands synced.")
+        print("✅ GLOBAL sync initiated. Commands will appear in other servers shortly.")
         
         print(f'Bot connected as {bot.user}')
         print('Bulldog Bot is active and monitoring messages.')
@@ -207,8 +203,13 @@ async def set_alerts_channel_slash(interaction: discord.Interaction, channel: di
 async def sync_command(ctx):
     await ctx.send("Attempting **Global** synchronization... 🌍")
     try:
-        synced = await bot.tree.sync()
-        await ctx.send(f"✅ **Globally** synced **{len(synced)}** commands. Use `/set alerts channel` now.")
+        # Perform global sync
+        synced_global = await bot.tree.sync()
+        
+        # Also perform guild sync on command server for immediate availability
+        synced_guild = await bot.tree.sync(guild=ctx.guild)
+        
+        await ctx.send(f"✅ **Globally** synced **{len(synced_global)}** commands. Also synced **{len(synced_guild)}** commands immediately to this guild. Use `/set alerts channel` now.")
     except Exception as e:
         await ctx.send(f"❌ Global sync failed: ```{e}```")
 
